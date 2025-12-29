@@ -468,10 +468,12 @@ export default function InvoiceEditorIsland(props: InvoiceEditorProps) {
 
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
-      if (event.ctrlKey && (event.key === "s" || event.key === "S")) {
+      // Support both Ctrl (Windows/Linux) and Cmd (macOS)
+      const modifierPressed = event.ctrlKey || event.metaKey;
+      if (modifierPressed && (event.key === "s" || event.key === "S")) {
         event.preventDefault();
         formRef.current?.requestSubmit();
-      } else if (event.ctrlKey && event.key === "Enter") {
+      } else if (modifierPressed && event.key === "Enter") {
         event.preventDefault();
         handleAddItem();
       }
@@ -789,7 +791,7 @@ export default function InvoiceEditorIsland(props: InvoiceEditorProps) {
           <label class="block text-sm">
             Items <span aria-hidden="true" class="text-error">*</span>
             <span class="ml-2 text-xs text-base-content/50 font-normal">
-              (Ctrl+Enter to add)
+              (Ctrl/Cmd+Enter to add)
             </span>
           </label>
           <button
