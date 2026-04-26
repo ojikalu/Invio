@@ -117,9 +117,7 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: |
-            # Adjust the image name as desired: e.g., invio, invio-combined, or <repo>-combined
-            name=ghcr.io/${{ steps.repo.outputs.name }}-combined,enable=true
-            name=ghcr.io/${{ steps.repo.outputs.name }}/invio,enable=true   # optional alias
+            name=ghcr.io/${{ steps.repo.outputs.name }},enable=true   # ← exactly the repo name
 
       - name: Determine cache-to
         id: cache-target
@@ -128,7 +126,7 @@ jobs:
             echo "config=type=gha,mode=max" >> $GITHUB_OUTPUT
           else
             echo "config<<EOF" >> $GITHUB_OUTPUT
-            echo "type=registry,ref=ghcr.io/${{ steps.repo.outputs.name }}-combined:buildcache,mode=max" >> $GITHUB_OUTPUT
+            echo "type=registry,ref=ghcr.io/${{ steps.repo.outputs.name }}:buildcache,mode=max" >> $GITHUB_OUTPUT
             echo "type=gha,mode=max" >> $GITHUB_OUTPUT
             echo "EOF" >> $GITHUB_OUTPUT
           fi
@@ -137,10 +135,11 @@ jobs:
         uses: docker/build-push-action@v6.18.0
         with:
           context: .
+          file: ./Dockerfile
           platforms: linux/amd64,linux/arm64
           push: ${{ !github.event.pull_request.head.repo.fork }}
           cache-from: |
-            type=registry,ref=ghcr.io/${{ steps.repo.outputs.name }}-combined:buildcache
+            type=registry,ref=ghcr.io/${{ steps.repo.outputs.name }}:buildcache
             type=gha
           cache-to: ${{ steps.cache-target.outputs.config }}
           tags: ${{ steps.metadata.outputs.tags }}
