@@ -3,22 +3,24 @@
  * CRUD operations for product management.
  * Products can be selected when creating invoices to auto-fill line items.
  */
-import { getDatabase } from "../database/init.ts";
+import { eq, sql } from "drizzle-orm";
+import { getDrizzleDatabase } from "../database/init.ts";
+import { invoiceItems, products } from "../database/schema.ts";
 import { CreateProductRequest, Product } from "../types/index.ts";
 import { generateUUID } from "../utils/uuid.ts";
 
-const mapRowToProduct = (row: unknown[]): Product => ({
-  id: row[0] as string,
-  name: row[1] as string,
-  description: (row[2] ?? undefined) as string | undefined,
-  unitPrice: Number(row[3]) || 0,
-  sku: (row[4] ?? undefined) as string | undefined,
-  unit: (row[5] ?? "piece") as string,
-  category: (row[6] ?? undefined) as string | undefined,
-  taxDefinitionId: (row[7] ?? undefined) as string | undefined,
-  isActive: Boolean(row[8]),
-  createdAt: new Date(row[9] as string),
-  updatedAt: new Date(row[10] as string),
+const mapRowToProduct = (row: typeof products.$inferSelect): Product => ({
+  id: row.id,
+  name: row.name,
+  description: row.description ?? undefined,
+  unitPrice: Number(row.unitPrice) || 0,
+  sku: row.sku ?? undefined,
+  unit: row.unit ?? "piece",
+  category: row.category ?? undefined,
+  taxDefinitionId: row.taxDefinitionId ?? undefined,
+  isActive: Boolean(row.isActive),
+  createdAt: new Date(String(row.createdAt)),
+  updatedAt: new Date(String(row.updatedAt)),
 });
 
 const toNullable = (v?: string): string | null => {
@@ -28,26 +30,23 @@ const toNullable = (v?: string): string | null => {
 };
 
 export const getProducts = (includeInactive = false): Product[] => {
-  const db = getDatabase();
-  const query = includeInactive
-    ? "SELECT id, name, description, unit_price, sku, unit, category, tax_definition_id, is_active, created_at, updated_at FROM products ORDER BY name ASC"
-    : "SELECT id, name, description, unit_price, sku, unit, category, tax_definition_id, is_active, created_at, updated_at FROM products WHERE is_active = 1 ORDER BY name ASC";
-  const results = db.query(query) as unknown[][];
-  return results.map((row: unknown[]) => mapRowToProduct(row));
+  const db = getDrizzleDatabase() as any;
+  const query = db.select().from(products);
+  const results = includeInactive
+    ? query.orderBy(products.name).all()
+    : query.where(eq(products.isActive, true)).orderBy(products.name).all();
+  return results.map((row: typeof products.$inferSelect) => mapRowToProduct(row));
 };
 
 export const getProductById = (id: string): Product | null => {
-  const db = getDatabase();
-  const results = db.query(
-    "SELECT id, name, description, unit_price, sku, unit, category, tax_definition_id, is_active, created_at, updated_at FROM products WHERE id = ?",
-    [id],
-  ) as unknown[][];
+  const db = getDrizzleDatabase() as any;
+  const results = db.select().from(products).where(eq(products.id, id)).all();
   if (results.length === 0) return null;
-  return mapRowToProduct(results[0] as unknown[]);
+  return mapRowToProduct(results[0] as typeof products.$inferSelect);
 };
 
 export const createProduct = (data: CreateProductRequest): Product => {
-  const db = getDatabase();
+  const db = getDrizzleDatabase() as any;
   const productId = generateUUID();
   const now = new Date();
 
@@ -57,22 +56,19 @@ export const createProduct = (data: CreateProductRequest): Product => {
   const category = toNullable(data.category);
   const taxDefinitionId = toNullable(data.taxDefinitionId);
 
-  db.query(
-    `INSERT INTO products (id, name, description, unit_price, sku, unit, category, tax_definition_id, is_active, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
-    [
-      productId,
-      data.name,
-      description,
-      data.unitPrice || 0,
-      sku,
-      unit,
-      category,
-      taxDefinitionId,
-      now.toISOString(),
-      now.toISOString(),
-    ],
-  );
+  db.insert(products).values({
+    id: productId,
+    name: data.name,
+    description,
+    unitPrice: data.unitPrice || 0,
+    sku,
+    unit,
+    category,
+    taxDefinitionId,
+    isActive: true,
+    createdAt: now.toISOString(),
+    updatedAt: now.toISOString(),
+  }).run();
 
   return {
     id: productId,
@@ -93,7 +89,7 @@ export const updateProduct = (
   id: string,
   data: Partial<CreateProductRequest> & { isActive?: boolean },
 ): Product | null => {
-  const db = getDatabase();
+  const db = getDrizzleDatabase() as any;
   const existing = getProductById(id);
   if (!existing) return null;
 
@@ -123,59 +119,44 @@ export const updateProduct = (
   const isActive =
     data.isActive !== undefined ? data.isActive : existing.isActive;
 
-  db.query(
-    `UPDATE products SET
-      name = ?, description = ?, unit_price = ?, sku = ?, unit = ?, category = ?, tax_definition_id = ?, is_active = ?, updated_at = ?
-     WHERE id = ?`,
-    [
-      name,
-      description,
-      unitPrice,
-      sku,
-      unit,
-      category,
-      taxDefinitionId,
-      isActive ? 1 : 0,
-      now.toISOString(),
-      id,
-    ],
-  );
+  db.update(products).set({
+    name,
+    description,
+    unitPrice,
+    sku,
+    unit,
+    category,
+    taxDefinitionId,
+    isActive,
+    updatedAt: now.toISOString(),
+  }).where(eq(products.id, id)).run();
 
   return getProductById(id);
 };
 
 export const deleteProduct = (productId: string): void => {
-  const db = getDatabase();
+  const db = getDrizzleDatabase() as any;
   const existing = getProductById(productId);
   if (!existing) {
     throw new Error("Product not found");
   }
 
   // Soft-delete: set is_active = false
-  db.query(
-    `UPDATE products SET is_active = 0, updated_at = ? WHERE id = ?`,
-    [new Date().toISOString(), productId],
-  );
+  db.update(products).set({ isActive: false, updatedAt: new Date().toISOString() }).where(eq(products.id, productId)).run();
 };
 
 export const isProductUsedInInvoices = (productId: string): boolean => {
-  const db = getDatabase();
-  const results = db.query(
-    "SELECT COUNT(*) FROM invoice_items WHERE product_id = ?",
-    [productId],
-  ) as unknown[][];
-  return Number(results[0]?.[0] ?? 0) > 0;
+  const db = getDrizzleDatabase() as any;
+  const results = db.select({ count: sql<number>`count(*)` }).from(invoiceItems).where(eq(invoiceItems.productId, productId)).all();
+  return Number(results[0]?.count ?? 0) > 0;
 };
 
 export const reactivateProduct = (productId: string): Product | null => {
-  const db = getDatabase();
+  const db = getDrizzleDatabase() as any;
   const existing = getProductById(productId);
   if (!existing) return null;
 
-  db.query(
-    `UPDATE products SET is_active = 1, updated_at = ? WHERE id = ?`,
-    [new Date().toISOString(), productId],
-  );
+  db.update(products).set({ isActive: true, updatedAt: new Date().toISOString() }).where(eq(products.id, productId)).run();
 
   return getProductById(productId);
 };

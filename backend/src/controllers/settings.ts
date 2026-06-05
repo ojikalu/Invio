@@ -1,17 +1,15 @@
-import { getDatabase } from "../database/init.ts";
+import { eq } from "drizzle-orm";
+import { getDrizzleDatabase } from "../database/init.ts";
+import { settings } from "../database/schema.ts";
 import { Setting } from "../types/index.ts";
 
 export const getSettings = () => {
-  const db = getDatabase();
-  const results = db.query("SELECT * FROM settings");
-  return results.map((row: unknown[]) => ({
-    key: row[0] as string,
-    value: row[1] as string,
-  }));
+  const db = getDrizzleDatabase() as any;
+  return db.select().from(settings).all();
 };
 
 export const updateSettings = (data: Record<string, string>) => {
-  const db = getDatabase();
+  const db = getDrizzleDatabase() as any;
   const results: Setting[] = [];
 
   for (const [key, raw] of Object.entries(data)) {
@@ -31,21 +29,20 @@ export const updateSettings = (data: Record<string, string>) => {
     ].includes(key) && String(raw).trim() === "";
 
     if (shouldClear) {
-      // delete the setting row if present
-      db.query("DELETE FROM settings WHERE key = ?", [
-        key === "taxId" ? "companyTaxId" : key,
-      ]);
+      db.delete(settings).where(
+        eq(settings.key, key === "taxId" ? "companyTaxId" : key),
+      ).run();
       results.push({ key: key === "taxId" ? "companyTaxId" : key, value: "" });
       continue;
     }
 
     const value = String(raw);
     // Upsert the setting
-    const existing = db.query("SELECT * FROM settings WHERE key = ?", [key]);
+    const existing = db.select().from(settings).where(eq(settings.key, key)).all();
     if (existing.length > 0) {
-      db.query("UPDATE settings SET value = ? WHERE key = ?", [value, key]);
+      db.update(settings).set({ value }).where(eq(settings.key, key)).run();
     } else {
-      db.query("INSERT INTO settings (key, value) VALUES (?, ?)", [key, value]);
+      db.insert(settings).values({ key, value }).run();
     }
     results.push({ key, value });
   }
@@ -54,26 +51,26 @@ export const updateSettings = (data: Record<string, string>) => {
 };
 
 export const getSetting = (key: string) => {
-  const db = getDatabase();
-  const result = db.query("SELECT value FROM settings WHERE key = ?", [key]);
-  return result.length > 0 ? result[0][0] : null;
+  const db = getDrizzleDatabase() as any;
+  const result = db.select({ value: settings.value }).from(settings).where(eq(settings.key, key)).all();
+  return result.length > 0 ? result[0].value : null;
 };
 
 export const setSetting = (key: string, value: string) => {
-  const db = getDatabase();
-  const existing = db.query("SELECT * FROM settings WHERE key = ?", [key]);
+  const db = getDrizzleDatabase() as any;
+  const existing = db.select().from(settings).where(eq(settings.key, key)).all();
 
   if (existing.length > 0) {
-    db.query("UPDATE settings SET value = ? WHERE key = ?", [value, key]);
+    db.update(settings).set({ value }).where(eq(settings.key, key)).run();
   } else {
-    db.query("INSERT INTO settings (key, value) VALUES (?, ?)", [key, value]);
+    db.insert(settings).values({ key, value }).run();
   }
 
   return { key, value };
 };
 
 export const deleteSetting = (key: string) => {
-  const db = getDatabase();
-  db.query("DELETE FROM settings WHERE key = ?", [key]);
+  const db = getDrizzleDatabase() as any;
+  db.delete(settings).where(eq(settings.key, key)).run();
   return { key } as Pick<Setting, "key">;
 };

@@ -1,4 +1,6 @@
-import { getDatabase } from "../database/init.ts";
+import { and, eq, sql } from "drizzle-orm";
+import { getDrizzleDatabase } from "../database/init.ts";
+import { userPermissions, users } from "../database/schema.ts";
 import { generateUUID } from "../utils/uuid.ts";
 import { hashPassword, verifyPassword } from "../utils/password.ts";
 import type {
@@ -28,46 +30,60 @@ function rowToUser(row: unknown[]): User {
 }
 
 function loadPermissions(userId: string): Permission[] {
-  const db = getDatabase();
-  const rows = db.query(
-    "SELECT resource, action FROM user_permissions WHERE user_id = ?",
-    [userId],
-  );
-  return rows.map((r) => ({
-    resource: String((r as unknown[])[0]) as Resource,
-    action: String((r as unknown[])[1]) as Action,
+  const db = getDrizzleDatabase() as any;
+  const rows = db.select({ resource: userPermissions.resource, action: userPermissions.action }).from(userPermissions).where(eq(userPermissions.userId, userId)).all();
+  return rows.map((r: { resource: string; action: string }) => ({
+    resource: r.resource as Resource,
+    action: r.action as Action,
   }));
 }
 
 function setPermissions(userId: string, permissions: Permission[]): void {
-  const db = getDatabase();
-  db.query("DELETE FROM user_permissions WHERE user_id = ?", [userId]);
+  const db = getDrizzleDatabase() as any;
+  db.delete(userPermissions).where(eq(userPermissions.userId, userId)).run();
   for (const p of permissions) {
-    db.query(
-      "INSERT INTO user_permissions (id, user_id, resource, action) VALUES (?, ?, ?, ?)",
-      [generateUUID(), userId, p.resource, p.action],
-    );
+    db.insert(userPermissions).values({
+      id: generateUUID(),
+      userId,
+      resource: p.resource,
+      action: p.action,
+    }).run();
   }
 }
 
 // ---- Public API ----
 
 export function listUsers(): User[] {
-  const db = getDatabase();
-  const rows = db.query(
-    "SELECT id, username, email, display_name, is_admin, is_active, two_factor_enabled, created_at, updated_at FROM users ORDER BY created_at ASC",
-  );
-  return rows.map((r) => rowToUser(r as unknown[]));
+  const db = getDrizzleDatabase() as any;
+  const rows = db.select().from(users).orderBy(users.createdAt).all();
+  return rows.map((r: typeof users.$inferSelect) => rowToUser([
+    r.id,
+    r.username,
+    r.email,
+    r.displayName,
+    r.isAdmin,
+    r.isActive,
+    r.twoFactorEnabled,
+    r.createdAt,
+    r.updatedAt,
+  ]));
 }
 
 export function getUserById(id: string): UserWithPermissions | null {
-  const db = getDatabase();
-  const rows = db.query(
-    "SELECT id, username, email, display_name, is_admin, is_active, two_factor_enabled, created_at, updated_at FROM users WHERE id = ?",
-    [id],
-  );
+  const db = getDrizzleDatabase() as any;
+  const rows = db.select().from(users).where(eq(users.id, id)).all();
   if (rows.length === 0) return null;
-  const user = rowToUser(rows[0] as unknown[]) as UserWithPermissions;
+  const user = rowToUser([
+    rows[0].id,
+    rows[0].username,
+    rows[0].email,
+    rows[0].displayName,
+    rows[0].isAdmin,
+    rows[0].isActive,
+    rows[0].twoFactorEnabled,
+    rows[0].createdAt,
+    rows[0].updatedAt,
+  ]) as UserWithPermissions;
   user.permissions = loadPermissions(user.id);
   return user;
 }
@@ -75,13 +91,20 @@ export function getUserById(id: string): UserWithPermissions | null {
 export function getUserByUsername(
   username: string,
 ): UserWithPermissions | null {
-  const db = getDatabase();
-  const rows = db.query(
-    "SELECT id, username, email, display_name, is_admin, is_active, two_factor_enabled, created_at, updated_at FROM users WHERE username = ?",
-    [username],
-  );
+  const db = getDrizzleDatabase() as any;
+  const rows = db.select().from(users).where(eq(users.username, username)).all();
   if (rows.length === 0) return null;
-  const user = rowToUser(rows[0] as unknown[]) as UserWithPermissions;
+  const user = rowToUser([
+    rows[0].id,
+    rows[0].username,
+    rows[0].email,
+    rows[0].displayName,
+    rows[0].isAdmin,
+    rows[0].isActive,
+    rows[0].twoFactorEnabled,
+    rows[0].createdAt,
+    rows[0].updatedAt,
+  ]) as UserWithPermissions;
   user.permissions = loadPermissions(user.id);
   return user;
 }
@@ -91,12 +114,10 @@ export function getUserByUsername(
  * Used during authentication.
  */
 export function getPasswordHash(username: string): string | null {
-  const db = getDatabase();
-  const rows = db.query("SELECT password_hash FROM users WHERE username = ?", [
-    username,
-  ]);
+  const db = getDrizzleDatabase() as any;
+  const rows = db.select({ passwordHash: users.passwordHash }).from(users).where(eq(users.username, username)).all();
   if (rows.length === 0) return null;
-  return String((rows[0] as unknown[])[0]);
+  return String(rows[0].passwordHash);
 }
 
 export function getUserTwoFactorState(userId: string): {
@@ -104,23 +125,24 @@ export function getUserTwoFactorState(userId: string): {
   encryptedSecret: string | null;
   recoveryCodeHashes: string[];
 } | null {
-  const db = getDatabase();
-  const rows = db.query(
-    "SELECT two_factor_enabled, two_factor_secret, two_factor_recovery_codes FROM users WHERE id = ?",
-    [userId],
-  );
+  const db = getDrizzleDatabase() as any;
+  const rows = db.select({
+    enabled: users.twoFactorEnabled,
+    secret: users.twoFactorSecret,
+    recoveryCodes: users.twoFactorRecoveryCodes,
+  }).from(users).where(eq(users.id, userId)).all();
   if (rows.length === 0) return null;
-  const row = rows[0] as unknown[];
+  const row = rows[0] as { enabled: boolean; secret: string | null; recoveryCodes: string | null };
   let recoveryCodeHashes: string[] = [];
   try {
-    recoveryCodeHashes = row[2] ? JSON.parse(String(row[2])) : [];
+    recoveryCodeHashes = row.recoveryCodes ? JSON.parse(String(row.recoveryCodes)) : [];
     if (!Array.isArray(recoveryCodeHashes)) recoveryCodeHashes = [];
   } catch {
     recoveryCodeHashes = [];
   }
   return {
-    enabled: Boolean(row[0]),
-    encryptedSecret: row[1] ? String(row[1]) : null,
+    enabled: Boolean(row.enabled),
+    encryptedSecret: row.secret ? String(row.secret) : null,
     recoveryCodeHashes: recoveryCodeHashes.filter(
       (h) => typeof h === "string" && h.length > 0,
     ),
@@ -132,12 +154,14 @@ export function setUserTwoFactorState(
   encryptedSecret: string,
   recoveryCodeHashes: string[],
 ): void {
-  const db = getDatabase();
+  const db = getDrizzleDatabase() as any;
   const now = new Date().toISOString();
-  db.query(
-    "UPDATE users SET two_factor_enabled = 1, two_factor_secret = ?, two_factor_recovery_codes = ?, updated_at = ? WHERE id = ?",
-    [encryptedSecret, JSON.stringify(recoveryCodeHashes), now, userId],
-  );
+  db.update(users).set({
+    twoFactorEnabled: true,
+    twoFactorSecret: encryptedSecret,
+    twoFactorRecoveryCodes: JSON.stringify(recoveryCodeHashes),
+    updatedAt: now,
+  }).where(eq(users.id, userId)).run();
 }
 
 export function consumeUserRecoveryCodeHash(
@@ -149,28 +173,30 @@ export function consumeUserRecoveryCodeHash(
   const idx = state.recoveryCodeHashes.findIndex((v) => v === codeHash);
   if (idx === -1) return false;
   state.recoveryCodeHashes.splice(idx, 1);
-  const db = getDatabase();
+  const db = getDrizzleDatabase() as any;
   const now = new Date().toISOString();
-  db.query(
-    "UPDATE users SET two_factor_recovery_codes = ?, updated_at = ? WHERE id = ?",
-    [JSON.stringify(state.recoveryCodeHashes), now, userId],
-  );
+  db.update(users).set({
+    twoFactorRecoveryCodes: JSON.stringify(state.recoveryCodeHashes),
+    updatedAt: now,
+  }).where(eq(users.id, userId)).run();
   return true;
 }
 
 export function disableUserTwoFactor(userId: string): void {
-  const db = getDatabase();
+  const db = getDrizzleDatabase() as any;
   const now = new Date().toISOString();
-  db.query(
-    "UPDATE users SET two_factor_enabled = 0, two_factor_secret = NULL, two_factor_recovery_codes = NULL, updated_at = ? WHERE id = ?",
-    [now, userId],
-  );
+  db.update(users).set({
+    twoFactorEnabled: false,
+    twoFactorSecret: null,
+    twoFactorRecoveryCodes: null,
+    updatedAt: now,
+  }).where(eq(users.id, userId)).run();
 }
 
 export async function createUser(
   data: CreateUserRequest,
 ): Promise<UserWithPermissions> {
-  const db = getDatabase();
+  const db = getDrizzleDatabase() as any;
 
   // Validate required fields
   if (!data.username || data.username.trim().length === 0) {
@@ -181,9 +207,7 @@ export async function createUser(
   }
 
   // Check uniqueness
-  const existing = db.query("SELECT id FROM users WHERE username = ?", [
-    data.username.trim(),
-  ]);
+  const existing = db.select({ id: users.id }).from(users).where(eq(users.username, data.username.trim())).all();
   if (existing.length > 0) {
     throw new Error("Username already exists");
   }
@@ -192,20 +216,17 @@ export async function createUser(
   const now = new Date().toISOString();
   const passwordHash = await hashPassword(data.password);
 
-  db.query(
-    `INSERT INTO users (id, username, email, display_name, password_hash, is_admin, is_active, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)`,
-    [
-      id,
-      data.username.trim(),
-      data.email?.trim() || null,
-      data.displayName?.trim() || null,
-      passwordHash,
-      data.isAdmin ? 1 : 0,
-      now,
-      now,
-    ],
-  );
+  db.insert(users).values({
+    id,
+    username: data.username.trim(),
+    email: data.email?.trim() || null,
+    displayName: data.displayName?.trim() || null,
+    passwordHash,
+    isAdmin: Boolean(data.isAdmin),
+    isActive: true,
+    createdAt: now,
+    updatedAt: now,
+  }).run();
 
   // Set permissions
   if (data.permissions && data.permissions.length > 0) {
@@ -219,44 +240,35 @@ export async function updateUser(
   id: string,
   data: UpdateUserRequest,
 ): Promise<UserWithPermissions> {
-  const db = getDatabase();
+  const db = getDrizzleDatabase() as any;
 
   const existing = getUserById(id);
   if (!existing) throw new Error("User not found");
 
   const now = new Date().toISOString();
-  const updates: string[] = [];
-  const params: (string | number | null)[] = [];
+  const patch: Record<string, unknown> = {};
 
   if (data.username !== undefined) {
     // Check uniqueness if changing username
-    const dup = db.query(
-      "SELECT id FROM users WHERE username = ? AND id != ?",
-      [data.username.trim(), id],
-    );
+    const dup = db.select({ id: users.id }).from(users).where(and(eq(users.username, data.username.trim()), sql`${users.id} != ${id}`)).all();
     if (dup.length > 0) throw new Error("Username already exists");
-    updates.push("username = ?");
-    params.push(data.username.trim());
+    patch.username = data.username.trim();
   }
 
   if (data.email !== undefined) {
-    updates.push("email = ?");
-    params.push(data.email?.trim() || null);
+    patch.email = data.email?.trim() || null;
   }
 
   if (data.displayName !== undefined) {
-    updates.push("display_name = ?");
-    params.push(data.displayName?.trim() || null);
+    patch.displayName = data.displayName?.trim() || null;
   }
 
   if (data.isAdmin !== undefined) {
-    updates.push("is_admin = ?");
-    params.push(data.isAdmin ? 1 : 0);
+    patch.isAdmin = Boolean(data.isAdmin);
   }
 
   if (data.isActive !== undefined) {
-    updates.push("is_active = ?");
-    params.push(data.isActive ? 1 : 0);
+    patch.isActive = Boolean(data.isActive);
   }
 
   if (data.password !== undefined && data.password.length > 0) {
@@ -264,15 +276,12 @@ export async function updateUser(
       throw new Error("Password must be at least 8 characters");
     }
     const hash = await hashPassword(data.password);
-    updates.push("password_hash = ?");
-    params.push(hash);
+    patch.passwordHash = hash;
   }
 
-  if (updates.length > 0) {
-    updates.push("updated_at = ?");
-    params.push(now);
-    params.push(id);
-    db.query(`UPDATE users SET ${updates.join(", ")} WHERE id = ?`, params);
+  if (Object.keys(patch).length > 0) {
+    patch.updatedAt = now;
+    db.update(users).set(patch).where(eq(users.id, id)).run();
   }
 
   // Update permissions if provided
@@ -284,22 +293,20 @@ export async function updateUser(
 }
 
 export function deleteUser(id: string): void {
-  const db = getDatabase();
+  const db = getDrizzleDatabase() as any;
   const existing = getUserById(id);
   if (!existing) throw new Error("User not found");
 
   // Prevent deleting the last admin
   if (existing.isAdmin) {
-    const adminCount = db.query(
-      "SELECT COUNT(*) FROM users WHERE is_admin = 1 AND is_active = 1",
-    );
-    const count = Number((adminCount[0] as unknown[])[0]);
+    const adminCount = db.select({ count: sql<number>`count(*)` }).from(users).where(and(eq(users.isAdmin, true), eq(users.isActive, true))).all();
+    const count = Number(adminCount[0]?.count ?? 0);
     if (count <= 1) {
       throw new Error("Cannot delete the last admin user");
     }
   }
 
-  db.query("DELETE FROM users WHERE id = ?", [id]);
+  db.delete(users).where(eq(users.id, id)).run();
 }
 
 /**
@@ -327,7 +334,7 @@ export async function authenticateUser(
  * Used during startup to determine if the admin seed is needed.
  */
 export function hasUsers(): boolean {
-  const db = getDatabase();
-  const rows = db.query("SELECT COUNT(*) FROM users");
-  return Number((rows[0] as unknown[])[0]) > 0;
+  const db = getDrizzleDatabase() as any;
+  const rows = db.select({ count: sql<number>`count(*)` }).from(users).all();
+  return Number(rows[0]?.count ?? 0) > 0;
 }

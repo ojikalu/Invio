@@ -1,68 +1,33 @@
-import { getDatabase } from "../database/init.ts";
+import { desc, eq, sql } from "drizzle-orm";
+import { getDrizzleDatabase } from "../database/init.ts";
+import { customers, invoices } from "../database/schema.ts";
 import { CreateCustomerRequest, Customer } from "../types/index.ts";
 import { generateUUID } from "../utils/uuid.ts";
 
-const mapRowToCustomer = (row: unknown[]): Customer => ({
-  id: row[0] as string,
-  name: row[1] as string,
-  contactName: (row[2] ?? undefined) as string | undefined,
-  email: (row[3] ?? undefined) as string | undefined,
-  phone: (row[4] ?? undefined) as string | undefined,
-  address: (row[5] ?? undefined) as string | undefined,
-  countryCode: (row[6] ?? undefined) as string | undefined,
-  taxId: (row[7] ?? undefined) as string | undefined,
-  createdAt: new Date(row[8] as string),
-  // Optional city/postal_code columns if present at the end
-  city: (row[9] ?? undefined) as string | undefined,
-  postalCode: (row[10] ?? undefined) as string | undefined,
+const mapRowToCustomer = (row: typeof customers.$inferSelect): Customer => ({
+  id: row.id,
+  name: row.name,
+  contactName: row.contactName ?? undefined,
+  email: row.email ?? undefined,
+  phone: row.phone ?? undefined,
+  address: row.address ?? undefined,
+  countryCode: row.countryCode ?? undefined,
+  taxId: row.taxId ?? undefined,
+  createdAt: new Date(String(row.createdAt)),
+  city: row.city ?? undefined,
+  postalCode: row.postalCode ?? undefined,
 });
 
 export const getCustomers = () => {
-  const db = getDatabase();
-  // Select with optional columns city, postal_code if exist; SQLite will ignore missing columns in SELECT list only by error, so use PRAGMA to detect
-  let results: unknown[][] = [];
-  try {
-    results = db.query(
-      "SELECT id, name, contact_name, email, phone, address, country_code, tax_id, created_at, city, postal_code FROM customers ORDER BY created_at DESC",
-    ) as unknown[][];
-  } catch (_e) {
-    // fallback older schema
-    try {
-      results = db.query(
-        "SELECT id, name, email, phone, address, country_code, tax_id, created_at, city, postal_code FROM customers ORDER BY created_at DESC",
-      ) as unknown[][];
-    } catch (_e2) {
-      results = db.query(
-        "SELECT id, name, email, phone, address, country_code, tax_id, created_at FROM customers ORDER BY created_at DESC",
-      ) as unknown[][];
-    }
-  }
-  return results.map((row: unknown[]) => mapRowToCustomer(row));
+  const db = getDrizzleDatabase() as any;
+  return db.select().from(customers).orderBy(desc(customers.createdAt)).all().map((row: typeof customers.$inferSelect) => mapRowToCustomer(row));
 };
 
 export const getCustomerById = (id: string): Customer | null => {
-  const db = getDatabase();
-  let results: unknown[][] = [];
-  try {
-    results = db.query(
-      "SELECT id, name, contact_name, email, phone, address, country_code, tax_id, created_at, city, postal_code FROM customers WHERE id = ?",
-      [id],
-    ) as unknown[][];
-  } catch (_e) {
-    try {
-      results = db.query(
-        "SELECT id, name, email, phone, address, country_code, tax_id, created_at, city, postal_code FROM customers WHERE id = ?",
-        [id],
-      ) as unknown[][];
-    } catch (_e2) {
-      results = db.query(
-        "SELECT id, name, email, phone, address, country_code, tax_id, created_at FROM customers WHERE id = ?",
-        [id],
-      ) as unknown[][];
-    }
-  }
+  const db = getDrizzleDatabase() as any;
+  const results = db.select().from(customers).where(eq(customers.id, id)).all();
   if (results.length === 0) return null;
-  return mapRowToCustomer(results[0] as unknown[]);
+  return mapRowToCustomer(results[0] as typeof customers.$inferSelect);
 };
 
 const toNullable = (v?: string): string | null => {
@@ -72,7 +37,7 @@ const toNullable = (v?: string): string | null => {
 };
 
 export const createCustomer = (data: CreateCustomerRequest): Customer => {
-  const db = getDatabase();
+  const db = getDrizzleDatabase() as any;
   const customerId = generateUUID();
   const now = new Date();
 
@@ -86,57 +51,19 @@ export const createCustomer = (data: CreateCustomerRequest): Customer => {
   const postal = toNullable((data as { postalCode?: string }).postalCode);
   const taxId = toNullable(data.taxId);
 
-  try {
-    db.query(
-      `
-      INSERT INTO customers (id, name, contact_name, email, phone, address, country_code, tax_id, created_at, city, postal_code)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `,
-      [
-        customerId,
-        data.name,
-        contactName,
-        email,
-        phone,
-        address,
-        countryCode,
-        taxId,
-        now,
-        city,
-        postal,
-      ],
-    );
-  } catch (_e) {
-    // fallback older schema
-    try {
-      db.query(
-        `
-        INSERT INTO customers (id, name, email, phone, address, country_code, tax_id, created_at, city, postal_code)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `,
-        [
-          customerId,
-          data.name,
-          email,
-          phone,
-          address,
-          countryCode,
-          taxId,
-          now,
-          city,
-          postal,
-        ],
-      );
-    } catch (_e2) {
-      db.query(
-        `
-        INSERT INTO customers (id, name, email, phone, address, country_code, tax_id, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      `,
-        [customerId, data.name, email, phone, address, countryCode, taxId, now],
-      );
-    }
-  }
+  db.insert(customers).values({
+    id: customerId,
+    name: data.name,
+    contactName,
+    email,
+    phone,
+    address,
+    countryCode,
+    taxId,
+    createdAt: now.toISOString(),
+    city,
+    postalCode: postal,
+  }).run();
 
   // Return undefined for missing optional fields
   return {
@@ -158,7 +85,7 @@ export const updateCustomer = (
   id: string,
   data: Partial<CreateCustomerRequest>,
 ): Customer | null => {
-  const db = getDatabase();
+  const db = getDrizzleDatabase() as any;
   // Read existing to support partials and normalize empties
   const existing = getCustomerById(id);
   if (!existing) return null;
@@ -207,74 +134,27 @@ export const updateCustomer = (
       ? toNullable((data as { postalCode?: string }).postalCode)
       : (existing.postalCode ?? null);
 
-  try {
-    db.query(
-      `
-      UPDATE customers SET
-        name = ?, contact_name = ?, email = ?, phone = ?, address = ?, country_code = ?, tax_id = ?, city = ?, postal_code = ?
-      WHERE id = ?
-    `,
-      [
-        next.name,
-        contactName,
-        email,
-        phone,
-        address,
-        countryCode,
-        taxId,
-        city,
-        postal,
-        id,
-      ],
-    );
-  } catch (_e) {
-    try {
-      db.query(
-        `
-        UPDATE customers SET
-          name = ?, email = ?, phone = ?, address = ?, country_code = ?, tax_id = ?, city = ?, postal_code = ?
-        WHERE id = ?
-      `,
-        [
-          next.name,
-          email,
-          phone,
-          address,
-          countryCode,
-          taxId,
-          city,
-          postal,
-          id,
-        ],
-      );
-    } catch (_e2) {
-      db.query(
-        `
-        UPDATE customers SET
-          name = ?, email = ?, phone = ?, address = ?, country_code = ?, tax_id = ?
-        WHERE id = ?
-      `,
-        [next.name, email, phone, address, countryCode, taxId, id],
-      );
-    }
-  }
+  db.update(customers).set({
+    name: next.name,
+    contactName,
+    email,
+    phone,
+    address,
+    countryCode,
+    taxId,
+    city,
+    postalCode: postal,
+  }).where(eq(customers.id, id)).run();
 
   return getCustomerById(id);
 };
 
 export function deleteCustomer(customerId: string): void {
   try {
-    const db = getDatabase();
+    const db = getDrizzleDatabase() as any;
 
-    // First check if customer has any invoices
-    const invoices = db.query(
-      `
-      SELECT COUNT(*) as count FROM invoices WHERE customer_id = ?
-    `,
-      [customerId],
-    );
-
-    const invoiceCount = invoices[0] ? Number(invoices[0][0]) : 0;
+    const invoiceCountRows = db.select({ count: sql<number>`count(*)` }).from(invoices).where(eq(invoices.customerId, customerId)).all();
+    const invoiceCount = Number(invoiceCountRows[0]?.count ?? 0);
 
     if (invoiceCount > 0) {
       throw new Error(
@@ -282,9 +162,8 @@ export function deleteCustomer(customerId: string): void {
       );
     }
 
-    // Delete customer if no invoices exist
-    db.query(`DELETE FROM customers WHERE id = ?`, [customerId]);
-    if ((getDatabase() as unknown as { changes: number }).changes === 0) {
+    const result = db.delete(customers).where(eq(customers.id, customerId)).run();
+    if (Number(result?.changes ?? 0) === 0) {
       throw new Error("Customer not found");
     }
   } catch (error) {

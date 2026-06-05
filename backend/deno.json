@@ -27,6 +27,8 @@
   "imports": {
     "@pakornv/fresh-plugin-tailwindcss": "jsr:@pakornv/fresh-plugin-tailwindcss@^1.0.3",
     "daisyui": "npm:daisyui@^5.0.54",
+    "better-sqlite3": "npm:better-sqlite3@^11.9.1",
+    "drizzle-orm": "npm:drizzle-orm@^0.44.2",
     "hono": "https://deno.land/x/hono@v4.0.10/mod.ts",
     "hono/cors": "https://deno.land/x/hono@v4.0.10/middleware/cors/index.ts",
     "hono/basic-auth": "https://deno.land/x/hono@v4.0.10/middleware/basic-auth/index.ts",

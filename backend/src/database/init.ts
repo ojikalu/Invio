@@ -1,11 +1,13 @@
-import { DB } from "sqlite";
+import type { AppDatabase } from "./client.ts";
+import { createDatabase } from "./client.ts";
 import { getAdminCredentials, getEnv, isDemoMode } from "../utils/env.ts";
 import { hashPassword } from "../utils/password.ts";
 import { generateUUID } from "../utils/uuid.ts";
 import { RESOURCE_ACTIONS } from "../types/index.ts";
 import type { Action, Resource } from "../types/index.ts";
 
-let db: DB;
+let db: any = null;
+let drizzleDb: any = null;
 
 //
 //  Path helpers
@@ -42,7 +44,7 @@ function readAppVersion(): string {
   }
 }
 
-function getStoredSchemaVersion(database: DB): string | null {
+function getStoredSchemaVersion(database: AppDatabase): string | null {
   try {
     const rows = database.query(
       "SELECT value FROM settings WHERE key = '_schema_version' LIMIT 1",
@@ -53,7 +55,7 @@ function getStoredSchemaVersion(database: DB): string | null {
   }
 }
 
-function storeSchemaVersion(database: DB): void {
+function storeSchemaVersion(database: AppDatabase): void {
   try {
     database.query(
       "INSERT OR REPLACE INTO settings (key, value) VALUES ('_schema_version', ?)",
@@ -80,7 +82,7 @@ function createDatabaseBackup(
 }
 
 /** Back up the database if the stored schema version differs from the app version. */
-function backupIfVersionChanged(database: DB, dbPath: string): void {
+function backupIfVersionChanged(database: AppDatabase, dbPath: string): void {
   try {
     const stored = getStoredSchemaVersion(database);
     if (stored !== readAppVersion()) {
@@ -115,7 +117,7 @@ function parseSqlStatements(sql: string): string[] {
 }
 
 /** Run each statement, silently ignoring "already exists" / "duplicate column" errors. */
-function executeMigrations(database: DB, statements: string[]): void {
+function executeMigrations(database: AppDatabase, statements: string[]): void {
   for (const stmt of statements) {
     try {
       database.execute(stmt);
@@ -131,7 +133,7 @@ function executeMigrations(database: DB, statements: string[]): void {
 
 /** Safely add a column if it doesn't already exist. */
 function addColumnIfMissing(
-  database: DB,
+  database: AppDatabase,
   table: string,
   column: string,
   definition: string,
@@ -155,14 +157,14 @@ function addColumnIfMissing(
 //  Schema upgrades
 //
 
-function ensureCustomerColumns(database: DB): void {
+function ensureCustomerColumns(database: AppDatabase): void {
   addColumnIfMissing(database, "customers", "contact_name", "TEXT");
   addColumnIfMissing(database, "customers", "country_code", "TEXT");
   addColumnIfMissing(database, "customers", "city", "TEXT");
   addColumnIfMissing(database, "customers", "postal_code", "TEXT");
 }
 
-function ensureInvoiceColumns(database: DB): void {
+function ensureInvoiceColumns(database: AppDatabase): void {
   addColumnIfMissing(
     database,
     "invoices",
@@ -177,7 +179,7 @@ function ensureInvoiceColumns(database: DB): void {
   );
 }
 
-function ensureInvoiceItemColumns(database: DB): void {
+function ensureInvoiceItemColumns(database: AppDatabase): void {
   addColumnIfMissing(database, "invoice_items", "unit", "TEXT");
   addColumnIfMissing(
     database,
@@ -187,7 +189,7 @@ function ensureInvoiceItemColumns(database: DB): void {
   );
 }
 
-function ensureUserColumns(database: DB): void {
+function ensureUserColumns(database: AppDatabase): void {
   addColumnIfMissing(database, "users", "two_factor_secret", "TEXT");
   addColumnIfMissing(
     database,
@@ -199,7 +201,7 @@ function ensureUserColumns(database: DB): void {
   addColumnIfMissing(database, "users", "oidc_subject", "TEXT");
 }
 
-function ensureStatusHistoryTable(database: DB): void {
+function ensureStatusHistoryTable(database: AppDatabase): void {
   database.execute(`
     CREATE TABLE IF NOT EXISTS invoice_status_history (
       id TEXT PRIMARY KEY,
@@ -217,7 +219,7 @@ function ensureStatusHistoryTable(database: DB): void {
   backfillStatusHistory(database);
 }
 
-function backfillStatusHistory(database: DB): void {
+function backfillStatusHistory(database: AppDatabase): void {
   // Insert one history entry per invoice that has no history yet.
   // Uses the invoice's current status and updated_at as the best available timestamp.
   const rows = database.query(
@@ -243,7 +245,7 @@ function backfillStatusHistory(database: DB): void {
   );
 }
 
-function ensureTaxTables(database: DB): void {
+function ensureTaxTables(database: AppDatabase): void {
   database.execute(`
     CREATE TABLE IF NOT EXISTS tax_definitions (
       id TEXT PRIMARY KEY, code TEXT UNIQUE, name TEXT,
@@ -276,7 +278,7 @@ function ensureTaxTables(database: DB): void {
   `);
 }
 
-function ensureProductTables(database: DB): void {
+function ensureProductTables(database: AppDatabase): void {
   database.execute(`
     CREATE TABLE IF NOT EXISTS products (
       id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT,
@@ -304,7 +306,7 @@ function ensureProductTables(database: DB): void {
   `);
 }
 
-function seedProductDefaults(database: DB): void {
+function seedProductDefaults(database: AppDatabase): void {
   const categories = [
     { code: "service", name: "Service", sort: 1 },
     { code: "goods", name: "Goods", sort: 2 },
@@ -349,7 +351,7 @@ function seedProductDefaults(database: DB): void {
  * performs an implicit `DELETE FROM invoices` which cascades to invoice_items.
  * See: https://www.sqlite.org/lang_altertable.html#making_other_kinds_of_table_schema_changes
  */
-function migrateInvoicesForVoided(database: DB): void {
+function migrateInvoicesForVoided(database: AppDatabase): void {
   const checkSql = database.query(
     "SELECT sql FROM sqlite_master WHERE type='table' AND name='invoices'",
   );
@@ -452,7 +454,7 @@ function migrateInvoicesForVoided(database: DB): void {
   }
 }
 
-function ensureSchemaUpgrades(database: DB): void {
+function ensureSchemaUpgrades(database: AppDatabase): void {
   try {
     ensureCustomerColumns(database);
     ensureInvoiceColumns(database);
@@ -489,7 +491,7 @@ function loadTemplateHtml(id: string): string {
   }
 }
 
-function insertBuiltinTemplates(database: DB): void {
+function insertBuiltinTemplates(database: AppDatabase): void {
   for (const t of BUILTIN_TEMPLATES) {
     const html = loadTemplateHtml(t.id);
     try {
@@ -519,7 +521,7 @@ function insertBuiltinTemplates(database: DB): void {
   }
 }
 
-function ensureTemplateDefaults(database: DB): void {
+function ensureTemplateDefaults(database: AppDatabase): void {
   try {
     database.query("DELETE FROM templates WHERE id = ?", ["default-template"]);
 
@@ -545,7 +547,7 @@ function ensureTemplateDefaults(database: DB): void {
 //  Admin seeding
 //
 
-async function seedAdminUser(database: DB): Promise<void> {
+async function seedAdminUser(database: AppDatabase): Promise<void> {
   try {
     const rows = database.query("SELECT COUNT(*) FROM users");
     if (Number((rows[0] as unknown[])[0]) > 0) return;
@@ -599,7 +601,9 @@ export async function initDatabase(): Promise<void> {
     /* new install */
   }
 
-  db = new DB(dbPath);
+  const created = createDatabase(dbPath);
+  db = created.raw;
+  drizzleDb = created.orm;
 
   // Backup before migrations if upgrading to a new version
   if (dbFileExisted) backupIfVersionChanged(db, dbPath);
@@ -680,17 +684,25 @@ export async function resetDatabaseFromDemo(): Promise<void> {
   }
 }
 
-export function getDatabase(): DB {
+export function getDatabase(): AppDatabase {
   if (!db) {
     throw new Error("Database not initialized. Call initDatabase() first.");
   }
-  return db;
+  return db as AppDatabase;
+}
+
+export function getDrizzleDatabase(): unknown {
+  if (!drizzleDb) {
+    throw new Error("Database not initialized. Call initDatabase() first.");
+  }
+  return drizzleDb;
 }
 
 export function closeDatabase(): void {
-  if (!db) return;
-  db.close();
-  db = undefined;
+  const currentDb = db;
+  if (!currentDb) return;
+  currentDb.close();
+  db = null;
 }
 
 //
