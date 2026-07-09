@@ -11,6 +11,7 @@ export interface Customer {
   taxId?: string;
   reference?: string; // BuyerReference or order ref
   createdAt: Date;
+  customerNumber?: number; // permanent sequential number, assigned at creation
 }
 
 export interface Product {

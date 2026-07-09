@@ -246,15 +246,15 @@ export const createInvoice = (
       throw new Error("Invoice number already exists");
     }
   } else {
-    // If advanced numbering pattern with {SEQ} is active, allocate real number now; else draft placeholder
+    // If advanced numbering pattern with {SEQ}, {CSEQ}, or {CNUM} is active, allocate real number now; else draft placeholder
     try {
       const rows = db.query(
         "SELECT value FROM settings WHERE key = 'invoiceNumberPattern' LIMIT 1",
       );
       if (rows.length > 0) {
         const pattern = String((rows[0] as unknown[])[0] || "").trim();
-        if (pattern && /\{SEQ\}/.test(pattern)) {
-          invoiceNumber = getNextInvoiceNumber();
+        if (pattern && /\{(C?SEQ|CNUM)\}/.test(pattern)) {
+          invoiceNumber = getNextInvoiceNumber(data.customerId);
         } else {
           invoiceNumber = generateDraftInvoiceNumber();
         }
@@ -928,7 +928,9 @@ export const updateInvoice = async (
       !nextInvoiceNumber &&
       existing.invoiceNumber.startsWith("DRAFT-")
     ) {
-      const finalNum = getNextInvoiceNumber();
+      const finalNum = getNextInvoiceNumber(
+        data.customerId ?? existing.customerId,
+      );
       db.query(
         "UPDATE invoices SET invoice_number = ?, updated_at = ? WHERE id = ?",
         [finalNum, new Date(), id],
@@ -1242,7 +1244,7 @@ export const publishInvoice = async (
     const now = new Date();
     let num = invoice.invoiceNumber;
     if (num.startsWith("DRAFT-")) {
-      num = getNextInvoiceNumber();
+      num = getNextInvoiceNumber(invoice.customerId);
     }
     db.execute("BEGIN");
     try {

@@ -341,7 +341,8 @@ adminRoutes.get(
   requirePermission("invoices", "create"),
   (c) => {
     try {
-      const next = getNextInvoiceNumber();
+      const customerId = c.req.query("customerId") || undefined;
+      const next = getNextInvoiceNumber(customerId);
       return c.json({ next });
     } catch (e) {
       return c.json({ error: String(e) }, 500);

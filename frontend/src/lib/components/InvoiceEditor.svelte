@@ -13,6 +13,10 @@
 
   let saving = $state(false);
   let error = $state("");
+  // Tracks whether the user manually edited the invoice number, as opposed to
+  // it just holding the auto-computed preview (which must not be submitted as
+  // an explicit override — see the customerId-aware preview effect below).
+  let invoiceNumberTouched = $state(false);
 
   let form = $state({
     customerId: initInvoice?.customerId || "",
@@ -54,6 +58,22 @@
   let customers = $derived(data.customers || []);
   let products = $derived(data.products || []);
   let taxDefinitions = $derived(data.taxDefinitions || []);
+
+  // Re-preview the next invoice number whenever the customer changes, so
+  // customer-scoped patterns ({CSEQ}, {CNUM}) show something representative.
+  // Only for new invoices, and only while the user hasn't typed their own
+  // number — the actual final number is always assigned server-side.
+  $effect(() => {
+    if (initInvoice || invoiceNumberTouched) return;
+    const customerId = form.customerId;
+    const qs = customerId ? `?customerId=${encodeURIComponent(customerId)}` : "";
+    fetch(`/api/v1/invoices/next-number${qs}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (d?.next && !invoiceNumberTouched) form.invoiceNumber = d.next;
+      })
+      .catch(() => {});
+  });
 
   function addItem() {
     items.push({
@@ -172,6 +192,9 @@
     try {
       const payload = {
         ...form,
+        // Only send an explicit invoice number when creating if the user actually
+        // typed one; otherwise let the backend assign it using the real customerId.
+        invoiceNumber: !initInvoice && !invoiceNumberTouched ? undefined : form.invoiceNumber,
         pricesIncludeTax: form.pricesIncludeTax === "true",
         items: items.map((i) => ({
           productId: i.productId || undefined,
@@ -244,7 +267,7 @@
       <div class="label">
         <span class="label-text">{t("Invoice Number")}</span>
       </div>
-      <input type="text" class="input input-bordered w-full" placeholder={t("e.g. INV-2025-001")} bind:value={form.invoiceNumber} />
+      <input type="text" class="input input-bordered w-full" placeholder={t("e.g. INV-2025-001")} bind:value={form.invoiceNumber} oninput={() => (invoiceNumberTouched = true)} />
     </label>
 
     <label class="form-control">

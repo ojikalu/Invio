@@ -607,6 +607,8 @@
                 <p>{t("Available placeholders")}:</p>
                 <p>
                   <code>{"{SEQ}"}</code> (sequential, recommended),
+                  <code>{"{CSEQ}"}</code> (sequential per customer),
+                  <code>{"{CNUM}"}</code> (customer's own number),
                   <code>{"{YYYY}"}</code>, <code>{"{YY}"}</code>,
                   <code>{"{MM}"}</code>, <code>{"{DD}"}</code>,
                   <code>{"{DATE}"}</code>, <code>{"{RAND4}"}</code>
